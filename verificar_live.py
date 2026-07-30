@@ -1,7 +1,8 @@
-import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -13,12 +14,20 @@ DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 CHANNEL_ID = "UC6V9mqiVuzd-v3ozUfCtZFA"
 
 ARQUIVO_ULTIMA_LIVE = Path("ultima_live.txt")
+FUSO_BRASIL = ZoneInfo("America/Sao_Paulo")
 
 
 def fazer_requisicao(url: str, params: dict) -> dict:
     resposta = requests.get(url, params=params, timeout=30)
     resposta.raise_for_status()
-    return resposta.json()
+
+    dados = resposta.json()
+
+    if "error" in dados:
+        mensagem = dados["error"].get("message", "Erro desconhecido na API.")
+        raise RuntimeError(f"Erro da API do YouTube: {mensagem}")
+
+    return dados
 
 
 def obter_playlist_de_uploads() -> str:
@@ -45,7 +54,7 @@ def obter_videos_recentes(playlist_id: str) -> list[str]:
         {
             "part": "contentDetails",
             "playlistId": playlist_id,
-            "maxResults": 10,
+            "maxResults": 15,
             "key": YOUTUBE_API_KEY,
         },
     )
@@ -55,6 +64,26 @@ def obter_videos_recentes(playlist_id: str) -> list[str]:
         for item in dados.get("items", [])
         if item.get("contentDetails", {}).get("videoId")
     ]
+
+
+def formatar_horario(data_iso: str | None) -> str | None:
+    if not data_iso:
+        return None
+
+    data_utc = datetime.fromisoformat(data_iso.replace("Z", "+00:00"))
+    data_brasil = data_utc.astimezone(FUSO_BRASIL)
+
+    return data_brasil.strftime("%d/%m/%Y às %H:%M")
+
+
+def formatar_espectadores(valor: str | None) -> str | None:
+    if not valor:
+        return None
+
+    try:
+        return f"{int(valor):,}".replace(",", ".")
+    except ValueError:
+        return valor
 
 
 def encontrar_live_ativa(video_ids: list[str]) -> dict | None:
@@ -79,13 +108,22 @@ def encontrar_live_ativa(video_ids: list[str]) -> dict | None:
         terminou = detalhes.get("actualEndTime")
 
         if esta_ao_vivo and iniciou and not terminou:
+            thumbnails = snippet.get("thumbnails", {})
+
+            thumbnail = (
+                thumbnails.get("maxres", {}).get("url")
+                or thumbnails.get("standard", {}).get("url")
+                or thumbnails.get("high", {}).get("url")
+                or thumbnails.get("medium", {}).get("url")
+            )
+
             return {
                 "id": video["id"],
                 "titulo": snippet.get("title", "Canção Nova ao vivo"),
-                "thumbnail": (
-                    snippet.get("thumbnails", {})
-                    .get("high", {})
-                    .get("url")
+                "thumbnail": thumbnail,
+                "inicio": formatar_horario(iniciou),
+                "espectadores": formatar_espectadores(
+                    detalhes.get("concurrentViewers")
                 ),
             }
 
@@ -106,17 +144,38 @@ def salvar_ultima_live(video_id: str) -> None:
 def enviar_para_discord(live: dict) -> None:
     link = f"https://www.youtube.com/watch?v={live['id']}"
 
+    campos = []
+
+    if live.get("inicio"):
+        campos.append(
+            {
+                "name": "🕐 Início da transmissão",
+                "value": live["inicio"],
+                "inline": True,
+            }
+        )
+
+    if live.get("espectadores"):
+        campos.append(
+            {
+                "name": "👥 Assistindo agora",
+                "value": live["espectadores"],
+                "inline": True,
+            }
+        )
+
     embed = {
         "title": "🔴 Canção Nova está AO VIVO!",
         "description": (
-            f"🎥 **{live['titulo']}**\n\n"
+            f"## {live['titulo']}\n\n"
             f"📺 **[Clique aqui para assistir à transmissão]({link})**\n\n"
-            "🙏 Que Deus abençoe este momento de oração!"
+            "🙏 Que Deus abençoe este momento de fé e oração!"
         ),
         "url": link,
         "color": 15158332,
+        "fields": campos,
         "footer": {
-            "text": "Canção Nova • Aviso de transmissão ao vivo"
+            "text": "Canção Nova • Transmissão ao vivo"
         },
     }
 
@@ -127,7 +186,7 @@ def enviar_para_discord(live: dict) -> None:
         DISCORD_WEBHOOK,
         json={
             "username": "Canção Nova Ao Vivo",
-            "content": "🔔 **A Canção Nova iniciou uma transmissão!**",
+            "content": "🔔 **A Canção Nova iniciou uma transmissão ao vivo!**",
             "embeds": [embed],
         },
         timeout=30,
@@ -145,25 +204,40 @@ def main() -> None:
         print("❌ Secret DISCORD_WEBHOOK não configurado.")
         sys.exit(1)
 
-    playlist_id = obter_playlist_de_uploads()
-    videos_recentes = obter_videos_recentes(playlist_id)
-    live = encontrar_live_ativa(videos_recentes)
+    try:
+        playlist_id = obter_playlist_de_uploads()
+        videos_recentes = obter_videos_recentes(playlist_id)
+        live = encontrar_live_ativa(videos_recentes)
 
-    if not live:
-        print("⚪ A Canção Nova não está ao vivo neste momento.")
-        return
+        if not live:
+            print("⚪ A Canção Nova não está ao vivo neste momento.")
+            return
 
-    ultima_live = ler_ultima_live()
+        ultima_live = ler_ultima_live()
 
-    if ultima_live == live["id"]:
-        print(f"🟡 A live {live['id']} já foi avisada anteriormente.")
-        return
+        if ultima_live == live["id"]:
+            print(f"🟡 A live {live['id']} já foi avisada anteriormente.")
+            return
 
-    enviar_para_discord(live)
-    salvar_ultima_live(live["id"])
+        enviar_para_discord(live)
+        salvar_ultima_live(live["id"])
 
-    print(f"✅ Aviso enviado: {live['titulo']}")
-    print(f"🔗 https://www.youtube.com/watch?v={live['id']}")
+        print(f"✅ Aviso enviado: {live['titulo']}")
+        print(f"🔗 https://www.youtube.com/watch?v={live['id']}")
+
+        if live.get("inicio"):
+            print(f"🕐 Início: {live['inicio']}")
+
+        if live.get("espectadores"):
+            print(f"👥 Assistindo: {live['espectadores']}")
+
+    except requests.RequestException as erro:
+        print(f"❌ Erro de conexão: {erro}")
+        sys.exit(1)
+
+    except Exception as erro:
+        print(f"❌ Erro durante a verificação: {erro}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
