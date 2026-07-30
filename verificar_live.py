@@ -6,11 +6,9 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 
-# Canal oficial da Canção Nova
 CHANNEL_ID = "UC6V9mqiVuzd-v3ozUfCtZFA"
 
 ARQUIVO_ULTIMA_LIVE = Path("ultima_live.txt")
@@ -20,22 +18,18 @@ FUSO_BRASIL = ZoneInfo("America/Sao_Paulo")
 def fazer_requisicao(url: str, params: dict) -> dict:
     resposta = requests.get(url, params=params, timeout=30)
     resposta.raise_for_status()
-
-    dados = resposta.json()
-
-    if "error" in dados:
-        mensagem = dados["error"].get("message", "Erro desconhecido na API.")
-        raise RuntimeError(f"Erro da API do YouTube: {mensagem}")
-
-    return dados
+    return resposta.json()
 
 
-def obter_playlist_de_uploads() -> str:
+def buscar_live():
     dados = fazer_requisicao(
-        "https://www.googleapis.com/youtube/v3/channels",
+        "https://www.googleapis.com/youtube/v3/search",
         {
-            "part": "contentDetails",
-            "id": CHANNEL_ID,
+            "part": "snippet",
+            "channelId": CHANNEL_ID,
+            "eventType": "live",
+            "type": "video",
+            "maxResults": 1,
             "key": YOUTUBE_API_KEY,
         },
     )
@@ -43,105 +37,69 @@ def obter_playlist_de_uploads() -> str:
     itens = dados.get("items", [])
 
     if not itens:
-        raise RuntimeError("Canal da Canção Nova não encontrado.")
-
-    return itens[0]["contentDetails"]["relatedPlaylists"]["uploads"]
-
-
-def obter_videos_recentes(playlist_id: str) -> list[str]:
-    dados = fazer_requisicao(
-        "https://www.googleapis.com/youtube/v3/playlistItems",
-        {
-            "part": "contentDetails",
-            "playlistId": playlist_id,
-            "maxResults": 15,
-            "key": YOUTUBE_API_KEY,
-        },
-    )
-
-    return [
-        item["contentDetails"]["videoId"]
-        for item in dados.get("items", [])
-        if item.get("contentDetails", {}).get("videoId")
-    ]
-
-
-def formatar_horario(data_iso: str | None) -> str | None:
-    if not data_iso:
         return None
 
-    data_utc = datetime.fromisoformat(data_iso.replace("Z", "+00:00"))
-    data_brasil = data_utc.astimezone(FUSO_BRASIL)
+    video_id = itens[0]["id"]["videoId"]
 
-    return data_brasil.strftime("%d/%m/%Y às %H:%M")
-
-
-def formatar_espectadores(valor: str | None) -> str | None:
-    if not valor:
-        return None
-
-    try:
-        return f"{int(valor):,}".replace(",", ".")
-    except ValueError:
-        return valor
-
-
-def encontrar_live_ativa(video_ids: list[str]) -> dict | None:
-    if not video_ids:
-        return None
-
-    dados = fazer_requisicao(
+    dados_video = fazer_requisicao(
         "https://www.googleapis.com/youtube/v3/videos",
         {
             "part": "snippet,liveStreamingDetails",
-            "id": ",".join(video_ids),
+            "id": video_id,
             "key": YOUTUBE_API_KEY,
         },
     )
 
-    for video in dados.get("items", []):
-        snippet = video.get("snippet", {})
-        detalhes = video.get("liveStreamingDetails", {})
+    video = dados_video["items"][0]
 
-        esta_ao_vivo = snippet.get("liveBroadcastContent") == "live"
-        iniciou = detalhes.get("actualStartTime")
-        terminou = detalhes.get("actualEndTime")
+    snippet = video["snippet"]
+    detalhes = video.get("liveStreamingDetails", {})
 
-        if esta_ao_vivo and iniciou and not terminou:
-            thumbnails = snippet.get("thumbnails", {})
+    thumbs = snippet.get("thumbnails", {})
 
-            thumbnail = (
-                thumbnails.get("maxres", {}).get("url")
-                or thumbnails.get("standard", {}).get("url")
-                or thumbnails.get("high", {}).get("url")
-                or thumbnails.get("medium", {}).get("url")
-            )
+    thumbnail = (
+        thumbs.get("maxres", {}).get("url")
+        or thumbs.get("standard", {}).get("url")
+        or thumbs.get("high", {}).get("url")
+        or thumbs.get("medium", {}).get("url")
+        or thumbs.get("default", {}).get("url")
+    )
 
-            return {
-                "id": video["id"],
-                "titulo": snippet.get("title", "Canção Nova ao vivo"),
-                "thumbnail": thumbnail,
-                "inicio": formatar_horario(iniciou),
-                "espectadores": formatar_espectadores(
-                    detalhes.get("concurrentViewers")
-                ),
-            }
+    inicio = detalhes.get("actualStartTime")
 
-    return None
+    if inicio:
+        inicio = (
+            datetime.fromisoformat(inicio.replace("Z", "+00:00"))
+            .astimezone(FUSO_BRASIL)
+            .strftime("%d/%m/%Y às %H:%M")
+        )
+
+    espectadores = detalhes.get("concurrentViewers")
+
+    if espectadores:
+        espectadores = f"{int(espectadores):,}".replace(",", ".")
+
+    return {
+        "id": video_id,
+        "titulo": snippet["title"],
+        "thumbnail": thumbnail,
+        "inicio": inicio,
+        "espectadores": espectadores,
+    }
 
 
-def ler_ultima_live() -> str:
+def ler_ultima_live():
     if not ARQUIVO_ULTIMA_LIVE.exists():
         return ""
 
-    return ARQUIVO_ULTIMA_LIVE.read_text(encoding="utf-8").strip()
+    return ARQUIVO_ULTIMA_LIVE.read_text().strip()
 
 
-def salvar_ultima_live(video_id: str) -> None:
-    ARQUIVO_ULTIMA_LIVE.write_text(video_id, encoding="utf-8")
+def salvar_ultima_live(video_id):
+    ARQUIVO_ULTIMA_LIVE.write_text(video_id)
 
 
-def enviar_para_discord(live: dict) -> None:
+def enviar_para_discord(live):
     link = f"https://www.youtube.com/watch?v={live['id']}"
 
     campos = []
@@ -180,23 +138,25 @@ def enviar_para_discord(live: dict) -> None:
     }
 
     if live.get("thumbnail"):
-        embed["image"] = {"url": live["thumbnail"]}
+        embed["image"] = {
+            "url": live["thumbnail"]
+        }
 
     resposta = requests.post(
-    DISCORD_WEBHOOK,
-    json={
-        "username": "📺 TV Canção Nova",
-        "avatar_url": "https://raw.githubusercontent.com/mpcostasfs-dotcom/Cancao-Nova-Ao-Vivo/main/ChatGPT%20Image%2030%20de%20jul.%20de%202026%2C%2013_38_30.png",
-        "content": "🔔 **A Canção Nova iniciou uma transmissão ao vivo!**",
-        "embeds": [embed],
-    },
-    timeout=30,
-)
+        DISCORD_WEBHOOK,
+        json={
+            "username": "📺 TV Canção Nova",
+            "avatar_url": "https://raw.githubusercontent.com/mpcostasfs-dotcom/Cancao-Nova-Ao-Vivo/main/ChatGPT%20Image%2030%20de%20jul.%20de%202026%2C%2013_38_30.png",
+            "content": "🔔 **A Canção Nova iniciou uma transmissão ao vivo!**",
+            "embeds": [embed],
+        },
+        timeout=30,
+    )
 
     resposta.raise_for_status()
 
 
-def main() -> None:
+def main():
     if not YOUTUBE_API_KEY:
         print("❌ Secret YOUTUBE_API_KEY não configurado.")
         sys.exit(1)
@@ -206,42 +166,40 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        playlist_id = obter_playlist_de_uploads()
-        videos_recentes = obter_videos_recentes(playlist_id)
-        live = encontrar_live_ativa(videos_recentes)
+        print("🔎 Procurando transmissão ao vivo...")
 
-        if not live = encontrar_live_ativa(videos_recentes)
+        live = buscar_live()
 
-print("Vídeos encontrados:", videos_recentes)
+        if not live:
+            print("⚪ Nenhuma transmissão ao vivo encontrada.")
+            return
 
-if not live:
-    print("⚪ A Canção Nova não está ao vivo neste momento.")
-    return
+        print(f"✅ Live encontrada: {live['titulo']}")
+        print(f"🆔 ID: {live['id']}")
 
         ultima_live = ler_ultima_live()
 
         if ultima_live == live["id"]:
-            print(f"🟡 A live {live['id']} já foi avisada anteriormente.")
+            print("🟡 Essa live já foi avisada anteriormente.")
             return
 
         enviar_para_discord(live)
         salvar_ultima_live(live["id"])
 
-        print(f"✅ Aviso enviado: {live['titulo']}")
-        print(f"🔗 https://www.youtube.com/watch?v={live['id']}")
+        print("✅ Aviso enviado para o Discord com sucesso!")
 
         if live.get("inicio"):
             print(f"🕐 Início: {live['inicio']}")
 
         if live.get("espectadores"):
-            print(f"👥 Assistindo: {live['espectadores']}")
+            print(f"👥 Espectadores: {live['espectadores']}")
 
     except requests.RequestException as erro:
         print(f"❌ Erro de conexão: {erro}")
         sys.exit(1)
 
     except Exception as erro:
-        print(f"❌ Erro durante a verificação: {erro}")
+        print(f"❌ Erro: {erro}")
         sys.exit(1)
 
 
