@@ -139,6 +139,20 @@ def salvar_ultima_live(video_id):
     ARQUIVO_ULTIMA_LIVE.write_text(video_id)
 
 
+def ler_ultimo_video():
+    caminho = Path("ultimo_video.txt")
+
+    if not caminho.exists():
+        return ""
+
+    return caminho.read_text().strip()
+
+
+def salvar_ultimo_video(video_id):
+    caminho = Path("ultimo_video.txt")
+    caminho.write_text(video_id)
+
+
 def enviar_para_discord(live):
     link = f"https://www.youtube.com/watch?v={live['id']}"
 
@@ -196,6 +210,41 @@ def enviar_para_discord(live):
     resposta.raise_for_status()
 
 
+def enviar_video_para_discord(video):
+    link = f"https://www.youtube.com/watch?v={video['id']}"
+
+    embed = {
+        "title": "🎥 Novo vídeo publicado!",
+        "description": (
+            f"## {video['titulo']}\n\n"
+            f"▶️ **[Clique aqui para assistir]({link})**"
+        ),
+        "url": link,
+        "color": 3447003,
+        "footer": {
+            "text": "Canção Nova • Novo vídeo"
+        },
+    }
+
+    if video.get("thumbnail"):
+        embed["image"] = {
+            "url": video["thumbnail"]
+        }
+
+    resposta = requests.post(
+        DISCORD_WEBHOOK,
+        json={
+            "username": "📺 TV Canção Nova",
+            "avatar_url": "https://raw.githubusercontent.com/mpcostasfs-dotcom/Cancao-Nova-Ao-Vivo/main/ChatGPT%20Image%2030%20de%20jul.%20de%202026%2C%2013_38_30.png",
+            "content": "📢 **A Canção Nova publicou um novo vídeo!**",
+            "embeds": [embed],
+        },
+        timeout=30,
+    )
+
+    resposta.raise_for_status()
+
+
 def main():
     if not YOUTUBE_API_KEY:
         print("❌ Secret YOUTUBE_API_KEY não configurado.")
@@ -206,33 +255,47 @@ def main():
         sys.exit(1)
 
     try:
-        print("🔎 Procurando transmissão ao vivo...")
+        print("====================================")
+        print("🔎 Verificando Canção Nova...")
+        print("====================================")
 
+        # -------------------------
+        # VERIFICAR LIVE
+        # -------------------------
         live = buscar_live()
 
-        if not live:
-            print("⚪ Nenhuma transmissão ao vivo encontrada.")
-            return
+        if live:
+            print(f"🔴 Live encontrada: {live['titulo']}")
 
-        print(f"✅ Live encontrada: {live['titulo']}")
-        print(f"🆔 ID: {live['id']}")
+            ultima_live = ler_ultima_live()
 
-        ultima_live = ler_ultima_live()
+            if ultima_live != live["id"]:
+                enviar_para_discord(live)
+                salvar_ultima_live(live["id"])
+                print("✅ Nova live enviada ao Discord.")
+            else:
+                print("🟡 Live já avisada anteriormente.")
+        else:
+            print("⚪ Nenhuma live encontrada.")
 
-        if ultima_live == live["id"]:
-            print("🟡 Essa live já foi avisada anteriormente.")
-            return
+        # -------------------------
+        # VERIFICAR VÍDEO
+        # -------------------------
+        video = buscar_video_recente()
 
-        enviar_para_discord(live)
-        salvar_ultima_live(live["id"])
+        if video:
+            print(f"🎥 Último vídeo: {video['titulo']}")
 
-        print("✅ Aviso enviado para o Discord com sucesso!")
+            ultimo_video = ler_ultimo_video()
 
-        if live.get("inicio"):
-            print(f"🕐 Início: {live['inicio']}")
-
-        if live.get("espectadores"):
-            print(f"👥 Espectadores: {live['espectadores']}")
+            if ultimo_video != video["id"]:
+                enviar_video_para_discord(video)
+                salvar_ultimo_video(video["id"])
+                print("✅ Novo vídeo enviado ao Discord.")
+            else:
+                print("🟡 Último vídeo já foi avisado.")
+        else:
+            print("⚪ Nenhum vídeo encontrado.")
 
     except requests.RequestException as erro:
         print(f"❌ Erro de conexão: {erro}")
