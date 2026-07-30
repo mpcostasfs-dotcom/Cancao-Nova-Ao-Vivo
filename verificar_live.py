@@ -88,6 +88,46 @@ def buscar_live():
     }
 
 
+def buscar_video_recente():
+    dados = fazer_requisicao(
+        "https://www.googleapis.com/youtube/v3/search",
+        {
+            "part": "snippet",
+            "channelId": CHANNEL_ID,
+            "order": "date",
+            "type": "video",
+            "maxResults": 1,
+            "key": YOUTUBE_API_KEY,
+        },
+    )
+
+    itens = dados.get("items", [])
+
+    if not itens:
+        return None
+
+    item = itens[0]
+
+    snippet = item["snippet"]
+
+    thumbs = snippet.get("thumbnails", {})
+
+    thumbnail = (
+        thumbs.get("maxres", {}).get("url")
+        or thumbs.get("standard", {}).get("url")
+        or thumbs.get("high", {}).get("url")
+        or thumbs.get("medium", {}).get("url")
+        or thumbs.get("default", {}).get("url")
+    )
+
+    return {
+        "id": item["id"]["videoId"],
+        "titulo": snippet["title"],
+        "thumbnail": thumbnail,
+        "publicado": snippet["publishedAt"],
+    }
+
+
 def ler_ultima_live():
     if not ARQUIVO_ULTIMA_LIVE.exists():
         return ""
