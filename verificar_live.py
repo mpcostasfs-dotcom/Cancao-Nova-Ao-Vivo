@@ -183,14 +183,15 @@ def enviar_para_discord(live: dict) -> None:
         embed["image"] = {"url": live["thumbnail"]}
 
     resposta = requests.post(
-        DISCORD_WEBHOOK,
-        json={
-            "username": "Canção Nova Ao Vivo",
-            "content": "🔔 **A Canção Nova iniciou uma transmissão ao vivo!**",
-            "embeds": [embed],
-        },
-        timeout=30,
-    )
+    DISCORD_WEBHOOK,
+    json={
+        "username": "📺 TV Canção Nova",
+        "avatar_url": "https://raw.githubusercontent.com/mpcostasfs-dotcom/Cancao-Nova-Ao-Vivo/main/ChatGPT%20Image%2030%20de%20jul.%20de%202026%2C%2013_38_30.png",
+        "content": "🔔 **A Canção Nova iniciou uma transmissão ao vivo!**",
+        "embeds": [embed],
+    },
+    timeout=30,
+)
 
     resposta.raise_for_status()
 
