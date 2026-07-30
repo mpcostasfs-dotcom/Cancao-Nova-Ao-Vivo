@@ -210,9 +210,13 @@ def main() -> None:
         videos_recentes = obter_videos_recentes(playlist_id)
         live = encontrar_live_ativa(videos_recentes)
 
-        if not live:
-            print("⚪ A Canção Nova não está ao vivo neste momento.")
-            return
+        if not live = encontrar_live_ativa(videos_recentes)
+
+print("Vídeos encontrados:", videos_recentes)
+
+if not live:
+    print("⚪ A Canção Nova não está ao vivo neste momento.")
+    return
 
         ultima_live = ler_ultima_live()
 
